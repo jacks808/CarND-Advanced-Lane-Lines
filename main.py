@@ -13,46 +13,15 @@ logging.basicConfig(level=logging.INFO,
                     format='[%(levelname)5s]%(asctime)s - %(message)s \t\t@[%(filename)s:%(lineno)d] ',
                     filemode='w')
 
-
-class Line():
-    def __init__(self):
-        # was the line detected in the last iteration?
-        self.detected = False
-
-        # x values of the last n fits of the line
-        self.recent_xfitted = []
-
-        # average x values of the fitted line over the last n iterations
-        self.bestx = None
-
-        # polynomial coefficients averaged over the last n iterations
-        self.best_fit = None
-
-        # polynomial coefficients for the most recent fit
-        self.current_fit = [np.array([False])]
-
-        # radius of curvature of the line in some units
-        self.radius_of_curvature = None
-
-        # distance in meters of vehicle center from the line
-        self.line_base_pos = None
-
-        # difference in fit coefficients between last and new fits
-        self.diffs = np.array([0, 0, 0], dtype='float')
-
-        # x values for detected line pixels
-        self.allx = None
-
-        # y values for detected line pixels
-        self.ally = None
-
-
 params = {
     'mode': 'camera_calibration',
+    'mode': 'correct_distortion_show_case',
+    'mode': 'perspective_transform_show_case',
+    'mode': 'test_curv',
     'mode': 'image',
     'mode': 'video',
 
-    'debug_mode': False,
+    'debug_mode': True,
 
     'ret_pickle_path': 'ret.pickle',
     'mtx_pickle_path': 'mtx.pickle',
@@ -103,13 +72,17 @@ def read_image(filepath, gray=False):
         return cv2.cvtColor(cv2.imread(filepath), cv2.COLOR_BGR2RGB)
 
 
-def show_histogram(histogram, title=""):
+def show_histogram(histogram, title="", debug=False):
+    if not debug:
+        return
+
     plt.plot(histogram)
     plt.title(title)
     plt.show()
 
 
-def show_image(img, cmap=None, title="", left_fit_x=None, right_fit_x=None, plot_y=None, debug=False):
+def show_image(img, title="", cmap=None, left_fit_x=None, right_fit_x=None, plot_y=None,
+               force_output=params['debug_mode']):
     """
     show image
     :param img: image data
@@ -118,20 +91,20 @@ def show_image(img, cmap=None, title="", left_fit_x=None, right_fit_x=None, plot
     :param left_fit_x:
     :param right_fit_x:
     :param plot_y:
+    :param force_output:
     :return:
     """
-    if debug:
+    if force_output:  # not debug mode, then not output image file
+        logging.debug("show image")
+
+        if left_fit_x is not None and right_fit_x is not None and plot_y is not None:
+            plt.plot(left_fit_x, plot_y, color='yellow')
+            plt.plot(right_fit_x, plot_y, color='yellow')
+
+        plt.imshow(X=img, cmap=cmap)
+        plt.title(title)
+        plt.show()
         return
-
-    logging.debug("show image")
-
-    if left_fit_x is not None and right_fit_x is not None and plot_y is not None:
-        plt.plot(left_fit_x, plot_y, color='yellow')
-        plt.plot(right_fit_x, plot_y, color='yellow')
-
-    plt.imshow(X=img, cmap=cmap)
-    plt.title(title)
-    plt.show()
 
 
 def find_corners(img, params):
@@ -244,6 +217,22 @@ def calc_perspective_transform(image):
                       [546, 460],  # top left
                       [732, 460]])  # top right
 
+    # For source points I'm grabbing the outer four detected corners
+    # src = np.float32([[weight, height - 10],  # bottom right
+    #                   [0, height - 10],  # bottom left
+    #                   [546, 450],  # top left
+    #                   [732, 450]])  # top right
+
+    if params['debug_mode']:
+        plt.imshow(image)
+
+        plt.plot(weight, height - 10, 'o')
+        plt.plot(0, height - 10, 'o')
+        plt.plot(546, 460, 'o')
+        plt.plot(732, 460, 'o')
+
+        plt.show()
+
     # For destination points, I'm arbitrarily choosing some points to be
     # a nice fit for displaying our warped result
     # again, not exact, but close enough for our purposes
@@ -256,13 +245,13 @@ def calc_perspective_transform(image):
     M = cv2.getPerspectiveTransform(src, dst)
     M_inv = cv2.getPerspectiveTransform(dst, src)
 
-    M_cache = M
-    M_inv_cache = M_inv
+    params['M_cache'] = M
+    params['M_inv_cache'] = M_inv
 
     return M, M_inv
 
 
-def perspective_transform(image, params):
+def perspective_transform(image, par_transformams):
     M, M_inv = calc_perspective_transform(image)
 
     height, weight = image.shape[:2]
@@ -290,7 +279,7 @@ def fit_lane(image, pamras):
     # Take a histogram of the bottom half of the image
     image_height = image.shape[0]
     histogram = np.sum(image[image_height // 2:, :], axis=0)
-    show_histogram(histogram, "Histogram of lanes")
+    show_histogram(histogram, "Histogram of lanes", debug=params['debug_mode'])
 
     # Create an output image to draw on and  visualize the result
     out_img = np.dstack((image, image, image)) * 255
@@ -381,15 +370,15 @@ def fit_lane(image, pamras):
     right_x = non_zero_x[right_lane_indices]
     right_y = non_zero_y[right_lane_indices]
 
-    y_meters_per_pix = params['y_meters_per_pix']  # meters per pixel in y dimension
-    x_meters_per_pix = params['x_meters_per_pix']  # meters per pixel in x dimension
-
     # Generate x and y values for plotting
     plot_y = np.linspace(0, image_height - 1, image_height)
 
     # plot read and blue lane mark
     out_img[non_zero_y[left_lane_indices], non_zero_x[left_lane_indices]] = [255, 0, 0]  # red
     out_img[non_zero_y[right_lane_indices], non_zero_x[right_lane_indices]] = [0, 0, 255]  # blue
+
+    y_meters_per_pix = params['y_meters_per_pix']  # meters per pixel in y dimension
+    x_meters_per_pix = params['x_meters_per_pix']  # meters per pixel in x dimension
 
     # Fit a second order polynomial to each (meters)
     left_fit_meters = np.polyfit(left_y * y_meters_per_pix, left_x * x_meters_per_pix, 2)
@@ -412,13 +401,14 @@ def convert_gray(image):
 def calc_center(image, params, left_fit, right_fit):
     x_meters_per_pix = params['x_meters_per_pix']  # meters per pixel in x dimension
 
-    bottom_x = image.shape[0]  # height of this image is the bottom x value
+    bottom_y = image.shape[0]  # height of this image is the bottom x value
 
-    left_bottom_x = calc_polynomial(bottom_x, left_fit[0], left_fit[1], left_fit[2])
-    right_bottom_x = calc_polynomial(bottom_x, right_fit[0], right_fit[1], right_fit[2])
-    lane_center_position = (right_bottom_x - left_bottom_x) / 2
+    left_bottom_x = calc_polynomial(bottom_y, left_fit[0], left_fit[1], left_fit[2])
+    right_bottom_x = calc_polynomial(bottom_y, right_fit[0], right_fit[1], right_fit[2])
 
+    lane_center_position = (right_bottom_x - left_bottom_x) / 2 + left_bottom_x
     car_position = image.shape[1] / 2  # car position
+
     center_dist = (car_position - lane_center_position) * x_meters_per_pix
     return center_dist
 
@@ -482,9 +472,11 @@ def draw_shadow(origin_image, undist_image, plot_y, left_fit_x, right_fit_x, M_i
 
     # Draw the lane onto the warped blank image
     cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
+    show_image(color_warp, "Image after draw green area")
 
     # Warp the blank back to original image space using inverse perspective matrix (Minv)
     newwarp = cv2.warpPerspective(color_warp, M_inv, (origin_image.shape[1], origin_image.shape[0]))
+    show_image(newwarp, "Image after perspective transform back to origin image")
 
     # Combine the result with the original image
     result = cv2.addWeighted(undist_image, 1, newwarp, 0.3, 0)
@@ -498,19 +490,21 @@ def handle_image(image):
     :param image: image
     :return: handled image
     """
-    show_image(image, title="Origin image", debug=params['debug_mode'])
+    show_image(image, title="Origin image")
 
     # 1. Distortion correction
     correct_image = correct_distortion(image, MTX, DIST)
-    show_image(correct_image, title="Distortion corrected image", debug=params['debug_mode'])
+    show_image(correct_image, title="Distortion corrected image")
+
+    show_image(perspective_transform(correct_image, params), title="perspective transform image")
 
     # 2. color/ gradient threshold
-    gradient_image = color_and_gradient(image, params)
-    show_image(gradient_image, title="Gradient Image", debug=params['debug_mode'])
+    gradient_image = color_and_gradient(correct_image, params)
+    show_image(gradient_image, title="Gradient Image")
 
     # 3. perspective transform
-    transform_image = perspective_transform(gradient_image, params)
-    show_image(transform_image, title="Perspective transformed image", debug=params['debug_mode'])
+    transform_image = perspective(gradient_image, params)
+    show_image(transform_image, title="Perspective transformed image")
 
     # 4. use slide window to plot line
     out_img, plot_y, left_fit_meters, right_fit_meters, left_fit, right_fit = fit_lane(transform_image, params)
@@ -519,8 +513,7 @@ def handle_image(image):
     right_fit_x = calc_polynomial(plot_y, right_fit[0], right_fit[1], right_fit[2])
 
     show_image(out_img, title="Image after plot lane",
-               left_fit_x=left_fit_x, right_fit_x=right_fit_x, plot_y=plot_y,
-               debug=params['debug_mode'])
+               left_fit_x=left_fit_x, right_fit_x=right_fit_x, plot_y=plot_y)
 
     # 5. calc center distance of road
     center_dist = calc_center(image, params, left_fit, right_fit)
@@ -533,7 +526,7 @@ def handle_image(image):
     # 7. draw shadow
     M, M_inv = calc_perspective_transform(image)
     image_shadow = draw_shadow(image, image, plot_y, left_fit_x, right_fit_x, M_inv)
-    show_image(image_shadow, title="Image after draw shadow", debug=params['debug_mode'])
+    show_image(image_shadow, title="Image after draw shadow")
 
     # 8. draw data
     image_add_curv_data = draw_data(image_shadow, avg_curv, center_dist)
@@ -565,16 +558,60 @@ if __name__ == '__main__':
         test_img_dir = 'test_images'
         for test_img in os.listdir(test_img_dir):
             image = read_image(os.path.join(test_img_dir, test_img))
+            show_image(image, force_output=True)
+
             handled_image = handle_image(image)
             cv2.imwrite('output_images/{}'.format(test_img), handled_image)
+
+            show_image(handled_image, force_output=True)
             # break
 
     elif mode == 'video':
-        clip1 = VideoFileClip(filename="./project_video.mp4").subclip(0, 5)
+        clip1 = VideoFileClip(filename="./project_video.mp4")#.subclip(0, 5)
+        # clip1 = VideoFileClip(filename="./challenge_video.mp4").subclip(0, 5)
         white_clip = clip1.fl_image(handle_image)
         white_clip.write_videofile("./out_{}.mp4".format(time.time()), audio=False)
         pass
+    elif mode == 'correct_distortion_show_case':
+        # distortion_image
+        origin_image = read_image("./test_images_2/straight_lines1.jpg")
+        correct_distortion = correct_distortion(origin_image, MTX, DIST)
+
+        plt.figure()
+
+        plt.subplot(121)
+        plt.imshow(origin_image)
+        plt.title("origin image")
+
+        plt.subplot(122)
+        plt.imshow(correct_distortion)
+        plt.title("distortion_image")
+
+        plt.show()
+
+    elif mode == 'perspective_transform_show_case':
+        # perspective_transform
+        origin_image = read_image("./test_images_2/straight_lines1.jpg")
+        distortion = correct_distortion(origin_image, MTX, DIST)
+        transformed = perspective_transform(distortion, params)
+
+        plt.figure()
+
+        plt.subplot(121)
+        plt.imshow(origin_image)
+        plt.title("origin image")
+
+        plt.subplot(122)
+        plt.imshow(transformed)
+        plt.title("perspective transform image")
+
+        plt.show()
+    elif mode == 'test_curv':
+        # perspective_transform
+        origin_image = read_image("./test_images_2/straight_lines1.jpg")
+        handle_image(origin_image)
+        origin_image = read_image("./test_images/straight_lines2.jpg")
+        handle_image(origin_image)
+
     else:
         logging.error("error")
-
-    pass
