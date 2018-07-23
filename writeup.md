@@ -357,6 +357,26 @@ There maybe some problem there. Because in some case there maybe more than one p
 
 To Fix this, Maybe I can cut some useless image out from source image. Or use some smooth technique to merge two peak to one. 
 
+## False positive part 2
+
+In some frame the green area is not cover all lane line:
+
+![](https://udacity-reviews-uploads.s3.us-west-2.amazonaws.com/_attachments/8029/1532299372/Screenshot_from_2018-07-22_23-39-23.png)
+
+So I implemete a function `is_parallel` to evaluate the left and right line is parallel. here is the code:
+
+![image-20180723152400745](https://ws4.sinaimg.cn/large/006tNc79ly1ftjtppzljjj30m20co76l.jpg)
+
+* Line 533: begin to iter this image in y direction, start from `0` end at `image height` each step in `100` pixels
+* Line 534~535 : calc `left_x` and `right_x` 
+* Line 537~538 : calculate current lane width.  And add all width to a array
+* Line 547: use  `std` function in `numpy` to calculate `standard deviation`. If the lane width in each point are same, the standard deviation will very small. Otherwise this value will be very big. 
+* And Also add some debug code from plot some information that can make sure my code is OK, here is the debug out:
+
+> ![image-20180723153052525](https://ws1.sinaimg.cn/large/006tNc79ly1ftjtwtim22j30fu09e3yx.jpg)
+>
+> At the left line, I plot some `●` symble. At the right line, I plot some `★` symble.
+
 ## Make curv value correct
 
 By check the document provide by us government, I know the first left turn curv is about `1km` but in my video, this value is near 1.5~2.0km. I try to find out why, but still have no idea. 
