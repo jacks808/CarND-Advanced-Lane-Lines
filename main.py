@@ -22,6 +22,7 @@ params = {
     'mode': 'video',
 
     'debug_mode': True,
+    'debug_mode': False,
 
     'ret_pickle_path': 'ret.pickle',
     'mtx_pickle_path': 'mtx.pickle',
@@ -47,8 +48,45 @@ params = {
     # cache for perspective transform
     'M_cache': None,
     'M_inv_cache': None,
+
+    'Min_line_std': 30
 }
 
+
+# Define a class to receive the characteristics of each line detection
+class Line():
+    def __init__(self):
+        # was the line detected in the last iteration?
+        self.detected = False
+
+        # x values of the last n fits of the line
+        self.recent_xfitted = []
+
+        # average x values of the fitted line over the last n iterations
+        self.bestx = None
+
+        # polynomial coefficients averaged over the last n iterations
+        self.best_fit = None
+
+        # polynomial coefficients for the most recent fit
+        self.current_fit = [np.array([False])]
+
+        # radius of curvature of the line in some units
+        self.radius_of_curvature = None
+
+        # distance in meters of vehicle center from the line
+        self.line_base_pos = None
+
+        # difference in fit coefficients between last and new fits
+        self.diffs = np.array([0, 0, 0], dtype='float')
+
+        # x values for detected line pixels
+        self.left_fit_x = None
+
+        # y values for detected line pixels
+        self.right_fit_x = None
+
+line = Line()
 
 def pickle_load(path):
     with open(path, 'rb') as f:
@@ -251,7 +289,7 @@ def calc_perspective_transform(image):
     return M, M_inv
 
 
-def perspective_transform(image, par_transformams):
+def perspective_transform(image, params):
     M, M_inv = calc_perspective_transform(image)
 
     height, weight = image.shape[:2]
@@ -484,6 +522,32 @@ def draw_shadow(origin_image, undist_image, plot_y, left_fit_x, right_fit_x, M_i
     return result
 
 
+def is_parallel(image, left_fit, right_fit, params):
+    height, weight = image.shape[:2]
+
+    total_lane_width = []
+
+    if params['debug_mode']:
+        plt.imshow(image)
+
+    for current_y in range(0, height, 100):
+        left_x = calc_polynomial(current_y, left_fit[0], left_fit[1], left_fit[2])
+        right_x = calc_polynomial(current_y, right_fit[0], right_fit[1], right_fit[2])
+
+        current_lane_width = right_x - left_x
+        total_lane_width.append(current_lane_width)
+
+        if params['debug_mode']:
+            plt.plot(left_x, current_y, 'o')
+            plt.plot(right_x, current_y, '*')
+
+    if params['debug_mode']:
+        plt.show()
+
+    std = np.std(np.array(total_lane_width))
+    return std < params['Min_line_std']
+
+
 def handle_image(image):
     """
     handle image
@@ -503,33 +567,39 @@ def handle_image(image):
     show_image(gradient_image, title="Gradient Image")
 
     # 3. perspective transform
-    transform_image = perspective(gradient_image, params)
+    transform_image = perspective_transform(gradient_image, params)
     show_image(transform_image, title="Perspective transformed image")
 
     # 4. use slide window to plot line
     out_img, plot_y, left_fit_meters, right_fit_meters, left_fit, right_fit = fit_lane(transform_image, params)
 
-    left_fit_x = calc_polynomial(plot_y, left_fit[0], left_fit[1], left_fit[2])
-    right_fit_x = calc_polynomial(plot_y, right_fit[0], right_fit[1], right_fit[2])
+    if is_parallel(out_img, left_fit, right_fit, params):
+        line.detected = True
 
-    show_image(out_img, title="Image after plot lane",
-               left_fit_x=left_fit_x, right_fit_x=right_fit_x, plot_y=plot_y)
+        # 5. calc center distance of road
+        line.line_base_pos = calc_center(image, params, left_fit, right_fit)
+        line.left_fit_x = calc_polynomial(plot_y, left_fit[0], left_fit[1], left_fit[2])
+        line.right_fit_x = calc_polynomial(plot_y, right_fit[0], right_fit[1], right_fit[2])
 
-    # 5. calc center distance of road
-    center_dist = calc_center(image, params, left_fit, right_fit)
+        show_image(out_img, title="Image after plot lane",
+                   left_fit_x=line.left_fit_x,
+                   right_fit_x=line.right_fit_x,
+                   plot_y=plot_y)
 
-    # 6. calc curvature
-    left_curv = calc_curv(plot_y, left_fit_meters)
-    right_curv = calc_curv(plot_y, right_fit_meters)
-    avg_curv = np.average([left_curv, right_curv])
+        # 6. calc curvature
+        left_curv = calc_curv(plot_y, left_fit_meters)
+        right_curv = calc_curv(plot_y, right_fit_meters)
+        avg_curv = np.average([left_curv, right_curv])
+
+        line.radius_of_curvature = avg_curv
 
     # 7. draw shadow
     M, M_inv = calc_perspective_transform(image)
-    image_shadow = draw_shadow(image, image, plot_y, left_fit_x, right_fit_x, M_inv)
+    image_shadow = draw_shadow(image, image, plot_y, line.left_fit_x, line.right_fit_x, M_inv)
     show_image(image_shadow, title="Image after draw shadow")
 
     # 8. draw data
-    image_add_curv_data = draw_data(image_shadow, avg_curv, center_dist)
+    image_add_curv_data = draw_data(image_shadow, line.radius_of_curvature, line.line_base_pos)
     show_image(image_add_curv_data, title="Final image")
 
     return image_add_curv_data
@@ -567,7 +637,7 @@ if __name__ == '__main__':
             # break
 
     elif mode == 'video':
-        clip1 = VideoFileClip(filename="./project_video.mp4")#.subclip(0, 5)
+        clip1 = VideoFileClip(filename="./project_video.mp4")#.subclip(23, 26)
         # clip1 = VideoFileClip(filename="./challenge_video.mp4").subclip(0, 5)
         white_clip = clip1.fl_image(handle_image)
         white_clip.write_videofile("./out_{}.mp4".format(time.time()), audio=False)
